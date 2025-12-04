@@ -1,27 +1,39 @@
-Valve.Steam=steam
-EpicGames.EpicGamesLauncher=EpicGamesLauncher
-ElectronicArts.EADesktop=EADesktop
-Ubisoft.Connect=upc
-GOG.Galaxy=GalaxyClient
-Blizzard.BattleNet=Battle.net
-Discord.Discord=Discord
-Telegram.TelegramDesktop=Telegram
-Mozilla.Firefox.tr=firefox
-TorProject.TorBrowser=firefox
-Microsoft.VisualStudioCode=Code
-JetBrains.Toolbox=jetbrains-toolbox
-GitHub.GitHubDesktop=GitHubDesktop
+# Gaming Clients
+ElectronicArts.EADesktop
+Ubisoft.Connect
+Valve.Steam
+EpicGames.EpicGamesLauncher
+GOG.Galaxy
+Blizzard.BattleNet
+
+# Development Tools
+JetBrains.Toolbox
+Microsoft.VisualStudioCode
+GitHub.GitHubDesktop
+Git.Git
+
+# Communication
+Discord.Discord
+Telegram.TelegramDesktop
+
+# Browsers
+Mozilla.Firefox.tr
+TorProject.TorBrowser
+
+# Utilities
 7zip.7zip
 Cloudflare.Warp
 Tailscale.Tailscale
-Spotify.Spotify=Spotify
-Bitwarden.Bitwarden=Bitwarden
-Google.GoogleDrive=GoogleDriveFS
+Spotify.Spotify
+Bitwarden.Bitwarden
+Google.GoogleDrive
 LocalSend.LocalSend
 Proton.ProtonVPN
 RustDesk.RustDesk
-qBittorrent.qBittorrent=qbittorrent
-Obsidian.Obsidian=Obsidian
+qBittorrent.qBittorrent
+Obsidian.Obsidian
+
+# Creative
 Upscayl.Upscayl
 Adobe.CreativeCloud
 Modrinth.ModrinthApp
