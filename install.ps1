@@ -1,16 +1,13 @@
 <#
 .SYNOPSIS
-    Automated software installation script with Pre-Flight Analysis.
+    Automated software installation script with Smart Process Management.
 
 .DESCRIPTION
-    1. Analyzes the current system state (Bulk check).
-    2. Identifies missing or outdated packages from 'packages.txt'.
-    3. Displays a summary plan.
-    4. Executes installations/upgrades only where necessary.
-
-.NOTES
-    File Name      : install_apps.ps1
-    Config File    : packages.txt
+    1. Reads 'packages.txt' to get Package IDs and optional Process Names.
+    2. Format in TXT: "PackageID=ProcessName" or just "PackageID".
+    3. Analyzes system state (Parallel-like check).
+    4. Kills conflicting processes defined in the TXT file before updating.
+    5. Installs or upgrades packages efficiently.
 #>
 
 Set-StrictMode -Version Latest
@@ -20,16 +17,13 @@ $ErrorActionPreference = "Stop"
 $ConfigFileName = "packages.txt"
 $ConfigPath = Join-Path -Path $PSScriptRoot -ChildPath $ConfigFileName
 
-# Custom Objects for Status Tracking
+# Status Enum
 $Status = @{
     Missing    = "Missing (Will Install)"
     Outdated   = "Outdated (Will Upgrade)"
     UpToDate   = "Up to Date (Skipping)"
 }
 
-<#
-.FUNCTION Show-Banner
-#>
 function Show-Banner {
     Clear-Host
     $Banner = @"
@@ -47,50 +41,61 @@ function Show-Banner {
 }
 
 <#
-.FUNCTION Get-PackageList
+.FUNCTION Get-PackageConfig
+.DESCRIPTION
+    Parses the TXT file into a structured list of objects.
+    Splits lines by '=' to separate ID and Process Name.
 #>
-function Get-PackageList {
+function Get-PackageConfig {
     param ( [string]$Path )
     if (-not (Test-Path -Path $Path)) { throw "Configuration file not found at: $Path" }
     
-    return Get-Content -Path $Path | 
-           ForEach-Object { $_.Trim() } | 
-           Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and -not $_.StartsWith("#") }
+    $RawContent = Get-Content -Path $Path
+    $ConfigList = @()
+
+    foreach ($Line in $RawContent) {
+        $Trimmed = $Line.Trim()
+        # Skip empty lines and comments
+        if ([string]::IsNullOrWhiteSpace($Trimmed) -or $Trimmed.StartsWith("#")) { continue }
+
+        # Parse "PackageID=ProcessName"
+        if ($Trimmed -match "=") {
+            $Parts = $Trimmed -split "=", 2
+            $ConfigList += [PSCustomObject]@{
+                Id          = $Parts[0].Trim()
+                ProcessName = $Parts[1].Trim()
+            }
+        }
+        else {
+            # Case where no process name is provided
+            $ConfigList += [PSCustomObject]@{
+                Id          = $Trimmed
+                ProcessName = $null
+            }
+        }
+    }
+    return $ConfigList
 }
 
-<#
-.FUNCTION Get-SystemState
-.DESCRIPTION
-    Fetches all installed and upgradeable packages in one go to avoid slow iterations.
-#>
 function Get-SystemState {
     Write-Host " [1/3] Fetching installed packages list..." -ForegroundColor Yellow
-    # We capture the raw string output of all installed apps
     $Global:InstalledData = winget list --source winget 2>&1 | Out-String
 
     Write-Host " [2/3] Checking for available upgrades..." -ForegroundColor Yellow
-    # We capture the raw string output of all available upgrades
     $Global:UpgradeData = winget upgrade --source winget --include-unknown 2>&1 | Out-String
 }
 
-<#
-.FUNCTION Analyze-Packages
-.DESCRIPTION
-    Compares the target list against the system state.
-#>
 function Analyze-Packages {
-    param ( [string[]]$TargetPackages )
-    
+    param ( $ConfigList )
     $ActionPlan = @()
-
     Write-Host " [3/3] Analyzing package status..." -ForegroundColor Yellow
 
-    foreach ($Pkg in $TargetPackages) {
+    foreach ($Item in $ConfigList) {
+        $PkgId = $Item.Id
         $CurrentStatus = $null
 
-        # Check Logic: String matching is faster and reliable enough for IDs
-        if ($Global:InstalledData -match "\b$([Regex]::Escape($Pkg))\b") {
-            if ($Global:UpgradeData -match "\b$([Regex]::Escape($Pkg))\b") {
+        if ($Global:InstalledData -match "\b$([Regex]::Escape($PkgId))\b") {
+            if ($Global:UpgradeData -match "\b$([Regex]::Escape($PkgId))\b") {
                 $CurrentStatus = $Status.Outdated
             } else {
                 $CurrentStatus = $Status.UpToDate
@@ -99,23 +104,34 @@ function Analyze-Packages {
             $CurrentStatus = $Status.Missing
         }
 
-        $ActionPlan += [PSCustomObject]@{
-            PackageId = $Pkg
-            Status    = $CurrentStatus
-        }
+        # Add status to the existing object
+        $Item | Add-Member -MemberType NoteProperty -Name "Status" -Value $CurrentStatus
+        $ActionPlan += $Item
     }
     return $ActionPlan
 }
 
-<#
-.FUNCTION Execute-Plan
-.DESCRIPTION
-    Executes the installation/upgrade commands based on the analysis.
-#>
+function Stop-ConflictingProcess {
+    param ( [string]$ProcessName )
+
+    if (-not [string]::IsNullOrWhiteSpace($ProcessName)) {
+        $RunningProc = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
+
+        if ($RunningProc) {
+            Write-Host "    ! Closing running instance of '$ProcessName'..." -ForegroundColor DarkYellow
+            try {
+                Stop-Process -Name $ProcessName -Force -ErrorAction Stop
+                Start-Sleep -Seconds 2
+            }
+            catch {
+                Write-Warning "    Could not close $ProcessName. Install might fail."
+            }
+        }
+    }
+}
+
 function Execute-Plan {
     param ( $Plan )
-
-    # Filter only items that need action
     $ToProcess = $Plan | Where-Object { $_.Status -ne $Status.UpToDate }
 
     if ($ToProcess.Count -eq 0) {
@@ -127,8 +143,11 @@ function Execute-Plan {
     Write-Host "--------------------------------------------------"
 
     foreach ($Item in $ToProcess) {
-        $Pkg = $Item.PackageId
+        $Pkg = $Item.Id
         Write-Host "Processing: $Pkg" -NoNewline
+
+        # Kill App using the name from the TXT file
+        Stop-ConflictingProcess -ProcessName $Item.ProcessName
 
         try {
             if ($Item.Status -eq $Status.Missing) {
@@ -137,7 +156,7 @@ function Execute-Plan {
             }
             elseif ($Item.Status -eq $Status.Outdated) {
                 Write-Host " [Upgrading]" -ForegroundColor Magenta
-                winget upgrade --id $Pkg -e --silent --accept-package-agreements --accept-source-agreements --include-unknown
+                winget upgrade --id $Pkg -e --silent --accept-package-agreements --accept-source-agreements --include-unknown --force
             }
             Write-Host " -> Done." -ForegroundColor Green
         }
@@ -151,26 +170,28 @@ function Execute-Plan {
 
 try {
     Show-Banner
-
-    # 1. Load Configuration
-    $TargetList = Get-PackageList -Path $ConfigPath
-    if ($null -eq $TargetList -or $TargetList.Count -eq 0) {
+    
+    # 1. Load Config (Parses ID=ProcessName)
+    $TargetConfig = Get-PackageConfig -Path $ConfigPath
+    
+    if ($TargetConfig.Count -eq 0) {
         Write-Warning "Package list is empty."
         exit
     }
-    Write-Host "Loaded $($TargetList.Count) packages from config."
-
-    # 2. Analyze System (Parallel-like bulk check)
+    
+    Write-Host "Loaded $($TargetConfig.Count) packages from config."
+    
+    # 2. Analyze
     Get-SystemState
-    $Plan = Analyze-Packages -TargetPackages $TargetList
-
-    # 3. Show Summary Table
+    $Plan = Analyze-Packages -ConfigList $TargetConfig
+    
+    # 3. Show Summary
     Write-Host "`nAnalysis Complete. Summary:" -ForegroundColor White
-    $Plan | Format-Table -AutoSize
-
+    $Plan | Select-Object Id, Status | Format-Table -AutoSize
+    
     # 4. Execute
     Execute-Plan -Plan $Plan
-
+    
     Write-Host "`nAll operations completed successfully." -ForegroundColor Green
 }
 catch {
