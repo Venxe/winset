@@ -154,6 +154,12 @@ function Stop-ConflictingProcess {
     Executes commands with smart quote handling for paths with spaces.
     Converts single quotes from text file to escaped double quotes for Winget.
 #>
+<#
+.FUNCTION Execute-Plan
+.DESCRIPTION
+    Executes commands using Argument Lists.
+    Fixes the double-escaping issue by letting PowerShell handle the quotes.
+#>
 function Execute-Plan {
     param ( $Plan )
     $ToProcess = $Plan | Where-Object { $_.Status -ne $Status.UpToDate }
@@ -179,9 +185,10 @@ function Execute-Plan {
         $FinalArgs = @()
         
         if (-not [string]::IsNullOrWhiteSpace($Item.Arguments)) {
-            # SMART FIX: Text dosyasındaki tek tırnakları (') kaçışlı çift tırnağa (\") çevir.
-            # Bu sayede "Program Files" gibi boşluklu yollar Winget tarafından tek parça olarak algılanır.
-            $SanitizedArgs = $Item.Arguments.Replace("'", "\`"") 
+            # DÜZELTME: Sadece tek tırnağı çift tırnağa çeviriyoruz.
+            # Önüne `\` (kaçış karakteri) KOYMUYORUZ. PowerShell bunu dizi olarak gönderirken
+            # otomatik olarak gerekli tırnaklamayı yapacaktır.
+            $SanitizedArgs = $Item.Arguments.Replace("'", '"') 
             
             $FinalArgs += "--override"
             $FinalArgs += $SanitizedArgs
@@ -193,7 +200,6 @@ function Execute-Plan {
 
         # Komut Hazırlığı
         $CommandArgs = @()
-        # Install ve Upgrade için kaynak (Source) belirtmek önemlidir
         if ($Item.Status -eq $Status.Missing) {
             Write-Host " [Installing]" -ForegroundColor Cyan
             $CommandArgs = @("install") + $BaseArgs + @("--source", "winget") + $FinalArgs
@@ -205,8 +211,8 @@ function Execute-Plan {
 
         # --- KOMUTU ÇALIŞTIR ---
         try {
-            # Hata ayıklama için gerekirse komutu ekrana basabilirsiniz:
-            # Write-Host "DEBUG CMD: winget $CommandArgs" -ForegroundColor DarkGray
+            # Hata ayıklama: Gerçekten ne çalıştırıldığını görmek için bu satırı açabilirsiniz:
+            # Write-Host "`nDEBUG: winget $CommandArgs" -ForegroundColor DarkGray
             
             $ProcessOutput = & winget $CommandArgs 2>&1 | Out-String
             
@@ -214,15 +220,16 @@ function Execute-Plan {
                 Write-Host " -> Success." -ForegroundColor Green
             }
             else {
-                # Battle.net gibi bazı araçlar başarıyla kurulsa bile garip exit code dönebilir.
-                # Ancak -1978335230 kesinlikle argüman hatasıdır.
                 Write-Host "`n [!] OPERATION FAILED (Exit Code: $LASTEXITCODE)" -ForegroundColor Red
                 
-                # Sadece hata durumunda logun son 10 satırını göstererek kalabalığı önle
+                # Hata özetini göster
                 $LogLines = $ProcessOutput -split "`n"
-                $SummaryLog = $LogLines | Select-Object -Last 10
-                Write-Host " Winget Error Summary:" -ForegroundColor Gray
-                Write-Host ($SummaryLog -join "`n") -ForegroundColor DarkGray
+                # Genellikle hata mesajı son satırlarda değil, ilk satırlardadır winget'te.
+                # Ama biz output'un tamamını temizleyip gösterelim:
+                $CleanLog = $LogLines | Where-Object { $_ -notmatch "Download|Verified|Progress" } | Select-Object -Last 15
+                
+                Write-Host " Winget Output Summary:" -ForegroundColor Gray
+                Write-Host ($CleanLog -join "`n") -ForegroundColor DarkGray
                 Write-Host "--------------------------------------------------"
             }
         }
