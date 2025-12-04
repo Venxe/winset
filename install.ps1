@@ -136,6 +136,12 @@ function Stop-ConflictingProcess {
     Executes winget using Argument Lists (Splats) instead of Invoke-Expression.
     This fixes bugs with spaces and parentheses in file paths.
 #>
+<#
+.FUNCTION Execute-Plan
+.DESCRIPTION
+    Executes commands and capturing real output.
+    Checks $LASTEXITCODE to determine if installation actually succeeded.
+#>
 function Execute-Plan {
     param ( $Plan )
     $ToProcess = $Plan | Where-Object { $_.Status -ne $Status.UpToDate }
@@ -155,45 +161,54 @@ function Execute-Plan {
         Stop-ConflictingProcess -ProcessName $Item.ProcessName
 
         # --- Base Arguments ---
-        # We build an array of strings. PowerShell handles quoting automatically this way.
         $BaseArgs = @("--id", $Pkg, "-e", "--accept-package-agreements", "--accept-source-agreements")
         
         # --- Handle Overrides vs Silent ---
         $FinalArgs = @()
         
         if (-not [string]::IsNullOrWhiteSpace($Item.Arguments)) {
-            # If custom args exist, pass them as a single string to --override
+            # Override parametresi ekleniyor.
+            # DİKKAT: Override kullanınca varsayılan silent parametreleri silinir.
+            # Yükleyicinin sessiz çalışması için gerekli komutları da arguments içine yazmalısınız.
             $FinalArgs += "--override"
             $FinalArgs += $Item.Arguments
             Write-Host " [Custom Args Applied]" -ForegroundColor DarkGray -NoNewline
         }
         else {
-            # Standard silent install
+            # Standart sessiz kurulum
             $FinalArgs += "--silent"
         }
 
-        # Combine logic for Install vs Upgrade
+        # Komut Hazırlığı
         $CommandArgs = @()
-        
         if ($Item.Status -eq $Status.Missing) {
             Write-Host " [Installing]" -ForegroundColor Cyan
             $CommandArgs = @("install") + $BaseArgs + @("--source", "winget") + $FinalArgs
         }
         elseif ($Item.Status -eq $Status.Outdated) {
             Write-Host " [Upgrading]" -ForegroundColor Magenta
-            # Upgrade often needs --include-unknown and --force
             $CommandArgs = @("upgrade") + $BaseArgs + @("--include-unknown", "--force") + $FinalArgs
         }
 
+        # --- KOMUTU ÇALIŞTIR VE ÇIKTIYI YAKALA ---
         try {
-            # Execution using the Call Operator (&)
-            # This is the safest way to run commands with complex arguments
-            & winget $CommandArgs | Out-Null
+            # 2>&1 ile hem standart çıktıyı hem hataları yakalıyoruz
+            $ProcessOutput = & winget $CommandArgs 2>&1 | Out-String
             
-            Write-Host " -> Done." -ForegroundColor Green
+            # Winget çıkış kodunu kontrol et (0 = Başarılı)
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host " -> Success." -ForegroundColor Green
+            }
+            else {
+                # HATA VARSA DETAYI GÖSTER
+                Write-Host "`n [!] OPERATION FAILED (Exit Code: $LASTEXITCODE)" -ForegroundColor Red
+                Write-Host " Winget Output Detail:" -ForegroundColor Gray
+                Write-Host $ProcessOutput -ForegroundColor DarkGray
+                Write-Host "--------------------------------------------------"
+            }
         }
         catch {
-            Write-Error "`nFailed to process $Pkg. Detail: $_"
+            Write-Error "`nCritical Script Error processing $Pkg. Detail: $_"
         }
     }
 }
