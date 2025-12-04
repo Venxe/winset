@@ -1,11 +1,10 @@
 <#
 .SYNOPSIS
-    Automated software installation script with Smart Process Management & Custom Arguments.
+    Automated software installation script with Smart Process Management & Robust Argument Handling.
 
 .DESCRIPTION
     1. Reads 'packages.txt'. Format: "PackageID=ProcessName|CustomArguments"
-    2. Kills conflicting processes.
-    3. Uses --override for packages requiring custom install paths (e.g. Battle.net).
+    2. Uses specific argument arrays to prevent PowerShell parsing errors with spaces/parentheses.
 #>
 
 Set-StrictMode -Version Latest
@@ -38,11 +37,6 @@ function Show-Banner {
     Write-Host $Banner -ForegroundColor Cyan
 }
 
-<#
-.FUNCTION Get-PackageConfig
-.DESCRIPTION
-    Parses TXT file. Supports 3 parts: ID = ProcessName | Arguments
-#>
 function Get-PackageConfig {
     param ( [string]$Path )
     if (-not (Test-Path -Path $Path)) { throw "Configuration file not found at: $Path" }
@@ -58,7 +52,6 @@ function Get-PackageConfig {
         $ProcName = $null
         $Args = $null
 
-        # Logic to split ID=Process|Args
         if ($Trimmed -match "=") {
             $FirstSplit = $Trimmed -split "=", 2
             $PkgId = $FirstSplit[0].Trim()
@@ -77,7 +70,6 @@ function Get-PackageConfig {
             $PkgId = $Trimmed
         }
 
-        # Treat empty strings as null for cleaner logic later
         if ([string]::IsNullOrWhiteSpace($ProcName)) { $ProcName = $null }
         if ([string]::IsNullOrWhiteSpace($Args)) { $Args = $null }
 
@@ -138,6 +130,12 @@ function Stop-ConflictingProcess {
     }
 }
 
+<#
+.FUNCTION Execute-Plan
+.DESCRIPTION
+    Executes winget using Argument Lists (Splats) instead of Invoke-Expression.
+    This fixes bugs with spaces and parentheses in file paths.
+#>
 function Execute-Plan {
     param ( $Plan )
     $ToProcess = $Plan | Where-Object { $_.Status -ne $Status.UpToDate }
@@ -156,34 +154,42 @@ function Execute-Plan {
         
         Stop-ConflictingProcess -ProcessName $Item.ProcessName
 
-        # Prepare arguments
-        # Base arguments: Exact match, Accept source/package agreements
-        $InstallCmd = "winget install --id $Pkg -e --source winget --accept-package-agreements --accept-source-agreements"
-        $UpgradeCmd = "winget upgrade --id $Pkg -e --accept-package-agreements --accept-source-agreements --include-unknown --force"
-
-        # Handle Custom Override Arguments vs Standard Silent
+        # --- Base Arguments ---
+        # We build an array of strings. PowerShell handles quoting automatically this way.
+        $BaseArgs = @("--id", $Pkg, "-e", "--accept-package-agreements", "--accept-source-agreements")
+        
+        # --- Handle Overrides vs Silent ---
+        $FinalArgs = @()
+        
         if (-not [string]::IsNullOrWhiteSpace($Item.Arguments)) {
-            # If custom args exist, use override (Warning: this replaces default silent flags of winget)
-            $OverrideStr = " --override `"$($Item.Arguments)`""
-            $InstallCmd += $OverrideStr
-            $UpgradeCmd += $OverrideStr
+            # If custom args exist, pass them as a single string to --override
+            $FinalArgs += "--override"
+            $FinalArgs += $Item.Arguments
             Write-Host " [Custom Args Applied]" -ForegroundColor DarkGray -NoNewline
         }
         else {
             # Standard silent install
-            $InstallCmd += " --silent"
-            $UpgradeCmd += " --silent"
+            $FinalArgs += "--silent"
+        }
+
+        # Combine logic for Install vs Upgrade
+        $CommandArgs = @()
+        
+        if ($Item.Status -eq $Status.Missing) {
+            Write-Host " [Installing]" -ForegroundColor Cyan
+            $CommandArgs = @("install") + $BaseArgs + @("--source", "winget") + $FinalArgs
+        }
+        elseif ($Item.Status -eq $Status.Outdated) {
+            Write-Host " [Upgrading]" -ForegroundColor Magenta
+            # Upgrade often needs --include-unknown and --force
+            $CommandArgs = @("upgrade") + $BaseArgs + @("--include-unknown", "--force") + $FinalArgs
         }
 
         try {
-            if ($Item.Status -eq $Status.Missing) {
-                Write-Host " [Installing]" -ForegroundColor Cyan
-                Invoke-Expression $InstallCmd | Out-Null
-            }
-            elseif ($Item.Status -eq $Status.Outdated) {
-                Write-Host " [Upgrading]" -ForegroundColor Magenta
-                Invoke-Expression $UpgradeCmd | Out-Null
-            }
+            # Execution using the Call Operator (&)
+            # This is the safest way to run commands with complex arguments
+            & winget $CommandArgs | Out-Null
+            
             Write-Host " -> Done." -ForegroundColor Green
         }
         catch {
