@@ -9,7 +9,7 @@ function Show-Banner {
     Clear-Host
     # Minimalist, clean header
     Write-Host "`n :: WINGET AUTOMATION TOOL ::" -ForegroundColor Cyan -BackgroundColor Black
-    Write-Host "    v2.0 | Optimized & Clean`n" -ForegroundColor DarkGray
+    Write-Host "    v2.1 | Optimized & Auto-Close`n" -ForegroundColor DarkGray
 }
 
 function Get-CleanedPackageList {
@@ -64,8 +64,35 @@ function Get-ActionPlan {
     return $tasks
 }
 
+function Stop-TargetProcess {
+    <#
+    .SYNOPSIS
+        Attempts to find and stop a process associated with the package ID.
+        Uses a heuristic based on the last part of the ID (e.g., 'Mozilla.Firefox' -> 'Firefox').
+    #>
+    param ([string]$PackageId)
+
+    $guessedProcessName = $PackageId.Split('.')[-1]
+    
+    # Try to get the process silently
+    $process = Get-Process -Name $guessedProcessName -ErrorAction SilentlyContinue
+
+    if ($process) {
+        Write-Host "  [!] Closing running app: $guessedProcessName" -ForegroundColor Yellow
+        try {
+            $process | Stop-Process -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Could not force close $guessedProcessName. Update might fail if files are locked."
+        }
+    }
+}
+
 function Invoke-WingetAction {
     param ([string]$Id, [string]$Action)
+
+    # Pre-flight check: Close the app if it's running
+    Stop-TargetProcess -PackageId $Id
 
     if ($Action -eq "Install") {
         Write-Host " [+] Installing : $Id" -ForegroundColor Cyan
