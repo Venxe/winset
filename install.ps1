@@ -142,6 +142,12 @@ function Stop-ConflictingProcess {
     Executes commands and capturing real output.
     Checks $LASTEXITCODE to determine if installation actually succeeded.
 #>
+<#
+.FUNCTION Execute-Plan
+.DESCRIPTION
+    Executes commands with smart quote handling for paths with spaces.
+    Converts single quotes from text file to escaped double quotes for Winget.
+#>
 function Execute-Plan {
     param ( $Plan )
     $ToProcess = $Plan | Where-Object { $_.Status -ne $Status.UpToDate }
@@ -167,20 +173,21 @@ function Execute-Plan {
         $FinalArgs = @()
         
         if (-not [string]::IsNullOrWhiteSpace($Item.Arguments)) {
-            # Override parametresi ekleniyor.
-            # DİKKAT: Override kullanınca varsayılan silent parametreleri silinir.
-            # Yükleyicinin sessiz çalışması için gerekli komutları da arguments içine yazmalısınız.
+            # SMART FIX: Text dosyasındaki tek tırnakları (') kaçışlı çift tırnağa (\") çevir.
+            # Bu sayede "Program Files" gibi boşluklu yollar Winget tarafından tek parça olarak algılanır.
+            $SanitizedArgs = $Item.Arguments.Replace("'", "\`"") 
+            
             $FinalArgs += "--override"
-            $FinalArgs += $Item.Arguments
+            $FinalArgs += $SanitizedArgs
             Write-Host " [Custom Args Applied]" -ForegroundColor DarkGray -NoNewline
         }
         else {
-            # Standart sessiz kurulum
             $FinalArgs += "--silent"
         }
 
         # Komut Hazırlığı
         $CommandArgs = @()
+        # Install ve Upgrade için kaynak (Source) belirtmek önemlidir
         if ($Item.Status -eq $Status.Missing) {
             Write-Host " [Installing]" -ForegroundColor Cyan
             $CommandArgs = @("install") + $BaseArgs + @("--source", "winget") + $FinalArgs
@@ -190,20 +197,26 @@ function Execute-Plan {
             $CommandArgs = @("upgrade") + $BaseArgs + @("--include-unknown", "--force") + $FinalArgs
         }
 
-        # --- KOMUTU ÇALIŞTIR VE ÇIKTIYI YAKALA ---
+        # --- KOMUTU ÇALIŞTIR ---
         try {
-            # 2>&1 ile hem standart çıktıyı hem hataları yakalıyoruz
+            # Hata ayıklama için gerekirse komutu ekrana basabilirsiniz:
+            # Write-Host "DEBUG CMD: winget $CommandArgs" -ForegroundColor DarkGray
+            
             $ProcessOutput = & winget $CommandArgs 2>&1 | Out-String
             
-            # Winget çıkış kodunu kontrol et (0 = Başarılı)
             if ($LASTEXITCODE -eq 0) {
                 Write-Host " -> Success." -ForegroundColor Green
             }
             else {
-                # HATA VARSA DETAYI GÖSTER
+                # Battle.net gibi bazı araçlar başarıyla kurulsa bile garip exit code dönebilir.
+                # Ancak -1978335230 kesinlikle argüman hatasıdır.
                 Write-Host "`n [!] OPERATION FAILED (Exit Code: $LASTEXITCODE)" -ForegroundColor Red
-                Write-Host " Winget Output Detail:" -ForegroundColor Gray
-                Write-Host $ProcessOutput -ForegroundColor DarkGray
+                
+                # Sadece hata durumunda logun son 10 satırını göstererek kalabalığı önle
+                $LogLines = $ProcessOutput -split "`n"
+                $SummaryLog = $LogLines | Select-Object -Last 10
+                Write-Host " Winget Error Summary:" -ForegroundColor Gray
+                Write-Host ($SummaryLog -join "`n") -ForegroundColor DarkGray
                 Write-Host "--------------------------------------------------"
             }
         }
@@ -212,7 +225,6 @@ function Execute-Plan {
         }
     }
 }
-
 # --- Main Execution Block ---
 
 try {
