@@ -13,9 +13,11 @@ function Show-Banner {
     #>
     Clear-Host
     $banner = @"
-┏━┓┏━┓╻ ╻╻┏┳┓┏┓ ╻ ╻┏━┓┏━┓╻┏ ╻┏━┓   ╻ ╻╻┏┓╻┏━┓┏━╸╺┳╸
-┗━┓┣━┫┗┳┛┃┃┃┃┣┻┓┃ ┃┣┳┛┣━┫┣┻┓ ┗━┓   ┃╻┃┃┃┗┫┗━┓┣╸  ┃ 
-┗━┛╹ ╹ ╹ ╹╹ ╹┗━┛┗━┛╹┗╸╹ ╹╹ ╹ ┗━┛   ┗┻┛╹╹ ╹┗━┛┗━╸ ╹ 
+__        _____ _   _ ____  _____ _____ 
+\ \      / /_ _| \ | / ___|| ____|_   _|
+ \ \ /\ / / | ||  \| \___ \|  _|   | |  
+  \ V  V /  | || |\  |___) | |___  | |  
+   \_/\_/  |___|_| \_|____/|_____| |_|  
 "@
     Write-Host $banner -ForegroundColor Cyan
     Write-Host "`nInitializing Winget Automation Tool...`n" -ForegroundColor Gray
