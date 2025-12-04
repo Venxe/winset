@@ -1,39 +1,36 @@
-# Gaming Clients
-ElectronicArts.EADesktop
-Ubisoft.Connect
-Valve.Steam
-EpicGames.EpicGamesLauncher
-GOG.Galaxy
-Blizzard.BattleNet
+# --- Gaming ---
+Valve.Steam=steam
+EpicGames.EpicGamesLauncher=EpicGamesLauncher
+ElectronicArts.EADesktop=EADesktop
+Ubisoft.Connect=upc
+GOG.Galaxy=GalaxyClient
+Blizzard.BattleNet=Battle.net
 
-# Development Tools
-JetBrains.Toolbox
-Microsoft.VisualStudioCode
-GitHub.GitHubDesktop
-Git.Git
+# --- Communication ---
+Discord.Discord=Discord
+Telegram.TelegramDesktop=Telegram
 
-# Communication
-Discord.Discord
-Telegram.TelegramDesktop
+# --- Browsers ---
+Mozilla.Firefox.tr=firefox
+TorProject.TorBrowser=firefox  # Tor da firefox exe'sini kullanır
 
-# Browsers
-Mozilla.Firefox.tr
-TorProject.TorBrowser
+# --- Dev Tools ---
+Microsoft.VisualStudioCode=Code
+JetBrains.Toolbox=jetbrains-toolbox
+GitHub.GitHubDesktop=GitHubDesktop
 
-# Utilities
+# --- Utilities (İşlem adı gerekmeyenler sadece ID yazılabilir) ---
 7zip.7zip
 Cloudflare.Warp
 Tailscale.Tailscale
-Spotify.Spotify
-Bitwarden.Bitwarden
-Google.GoogleDrive
+Spotify.Spotify=Spotify
+Bitwarden.Bitwarden=Bitwarden
+Google.GoogleDrive=GoogleDriveFS
 LocalSend.LocalSend
 Proton.ProtonVPN
 RustDesk.RustDesk
-qBittorrent.qBittorrent
-Obsidian.Obsidian
-
-# Creative
+qBittorrent.qBittorrent=qbittorrent
+Obsidian.Obsidian=Obsidian
 Upscayl.Upscayl
 Adobe.CreativeCloud
 Modrinth.ModrinthApp
