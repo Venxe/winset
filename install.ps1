@@ -1,262 +1,111 @@
 <#
 .SYNOPSIS
-    Automated software installation script with Smart Process Management & Robust Argument Handling.
+    Bulk Installation and Update Script using Winget.
 
 .DESCRIPTION
-    1. Reads 'packages.txt'. Format: "PackageID=ProcessName|CustomArguments"
-    2. Uses specific argument arrays to prevent PowerShell parsing errors with spaces/parentheses.
+    Reads packages from packages.txt.
+    Scans the system for current state (installed/upgradable).
+    Installs missing packages and updates outdated ones.
 #>
 
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+# --- Configuration ---
+$PackageFile = Join-Path $PSScriptRoot "packages.txt"
+$WingetArgs = "--accept-package-agreements --accept-source-agreements --silent --disable-interactivity"
 
-# Configuration path
-$ConfigFileName = "packages.txt"
-$ConfigPath = Join-Path -Path $PSScriptRoot -ChildPath $ConfigFileName
+# --- Helper Functions ---
 
-# Status Enum
-$Status = @{
-    Missing    = "Missing (Will Install)"
-    Outdated   = "Outdated (Will Upgrade)"
-    UpToDate   = "Up to Date (Skipping)"
-}
-
-function Show-Banner {
+function Show-Header {
     Clear-Host
-    $Banner = @"
+    $header = @'
  ____    _ __   _____ __  __ ____  _    _ ____       _    _  ___ ____  
 / ___|  / \\ \ / /_ _|  \/  | __ )| | | |  _ \    / \  | |/ ( ) ___| 
 \___ \ / _ \\ V / | || |\/| |  _ \| | | | |_) |  / _ \ | ' /|/\___ \ 
  ___) / ___ \| |  | || |  | | |_) | |_| |  _ <  / ___ \| . \   ___) |
-|____/_/  _\_\_|_|___|_|__|_|____/_\___/|_| \_\/_/    \_\_|\_\ |____/ 
-\ \       / /_ _| \ | / ___|| ____|_    _|                            
- \ \ /\ / / | ||  \| \___ \|  _|   | |                                
-  \ V  V /  | || |\  |___) | |___  | |                                
-   \_/\_/  |___|_| \_|____/|_____| |_|
-"@
-    Write-Host $Banner -ForegroundColor Cyan
+|____/_/  _\_\_|_|___|_|__|_|____/_\___/|_| \_\/_/   \_\_|\_\ |____/ 
+\ \       / /_ _| \ | / ___|| ____|_    _|                       
+ \ \ /\ / / | ||  \| \___ \|  _|   | |                           
+  \ V  V /  | || |\  |___) | |___  | |                           
+   \_/\_/  |___|_| \_|____/|_____| |_|                           
+'@
+    Write-Host $header -ForegroundColor Cyan
+    Write-Host "`nWelcome to the Automated Installation Wizard." -ForegroundColor White
+    Write-Host "Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -ForegroundColor DarkGray
+    Write-Host "--------------------------------------------------------`n" -ForegroundColor DarkGray
 }
 
-function Get-PackageConfig {
-    param ( [string]$Path )
-    if (-not (Test-Path -Path $Path)) { throw "Configuration file not found at: $Path" }
-    
-    $RawContent = Get-Content -Path $Path
-    $ConfigList = @()
-
-    foreach ($Line in $RawContent) {
-        $Trimmed = $Line.Trim()
-        if ([string]::IsNullOrWhiteSpace($Trimmed) -or $Trimmed.StartsWith("#")) { continue }
-
-        $PkgId = $null
-        $ProcName = $null
-        $Args = $null
-
-        if ($Trimmed -match "=") {
-            $FirstSplit = $Trimmed -split "=", 2
-            $PkgId = $FirstSplit[0].Trim()
-            $RightSide = $FirstSplit[1].Trim()
-
-            if ($RightSide -match "\|") {
-                $SecondSplit = $RightSide -split "\|", 2
-                $ProcName = $SecondSplit[0].Trim()
-                $Args = $SecondSplit[1].Trim()
-            }
-            else {
-                $ProcName = $RightSide
-            }
-        }
-        else {
-            $PkgId = $Trimmed
-        }
-
-        if ([string]::IsNullOrWhiteSpace($ProcName)) { $ProcName = $null }
-        if ([string]::IsNullOrWhiteSpace($Args)) { $Args = $null }
-
-        $ConfigList += [PSCustomObject]@{
-            Id          = $PkgId
-            ProcessName = $ProcName
-            Arguments   = $Args
-        }
+function Get-PackageList {
+    if (-not (Test-Path $PackageFile)) {
+        Write-Host "[ERROR] $PackageFile not found!" -ForegroundColor Red
+        exit 1
     }
-    return $ConfigList
+    return Get-Content $PackageFile | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -notmatch "^#" }
 }
 
-function Get-SystemState {
-    Write-Host " [1/3] Fetching installed packages list..." -ForegroundColor Yellow
-    $Global:InstalledData = winget list --source winget 2>&1 | Out-String
-
-    Write-Host " [2/3] Checking for available upgrades..." -ForegroundColor Yellow
-    $Global:UpgradeData = winget upgrade --source winget --include-unknown 2>&1 | Out-String
+function Scan-System {
+    Write-Host "[SCANNING] Analyzing system state (this may take a few seconds)..." -ForegroundColor Yellow
+    
+    # Batch scan to avoid multiple expensive calls
+    $installedRaw = winget list 2>&1
+    $upgradableRaw = winget upgrade 2>&1
+    
+    return @{
+        Installed = $installedRaw | Out-String
+        Upgradable = $upgradableRaw | Out-String
+    }
 }
 
-function Analyze-Packages {
-    param ( $ConfigList )
-    $ActionPlan = @()
-    Write-Host " [3/3] Analyzing package status..." -ForegroundColor Yellow
+function Install-Or-Update {
+    param (
+        [string]$PackageId,
+        [hashtable]$SystemState
+    )
 
-    foreach ($Item in $ConfigList) {
-        $PkgId = $Item.Id
-        $CurrentStatus = $null
+    # Check state
+    $isInstalled = $SystemState.Installed -match $PackageId
+    $needsUpdate = $SystemState.Upgradable -match $PackageId
 
-        if ($Global:InstalledData -match "\b$([Regex]::Escape($PkgId))\b") {
-            if ($Global:UpgradeData -match "\b$([Regex]::Escape($PkgId))\b") {
-                $CurrentStatus = $Status.Outdated
-            } else {
-                $CurrentStatus = $Status.UpToDate
-            }
+    if (-not $isInstalled) {
+        Write-Host "[INSTALLING] $PackageId not found. Installing..." -ForegroundColor Cyan
+        Start-Process winget -ArgumentList "install --id $PackageId $WingetArgs" -Wait -NoNewWindow
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  [OK] $PackageId installed successfully." -ForegroundColor Green
         } else {
-            $CurrentStatus = $Status.Missing
+            Write-Host "  [ERROR] Failed to install $PackageId. Exit code: $LASTEXITCODE" -ForegroundColor Red
         }
-
-        $Item | Add-Member -MemberType NoteProperty -Name "Status" -Value $CurrentStatus
-        $ActionPlan += $Item
     }
-    return $ActionPlan
-}
-
-function Stop-ConflictingProcess {
-    param ( [string]$ProcessName )
-    if (-not [string]::IsNullOrWhiteSpace($ProcessName)) {
-        $RunningProc = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
-        if ($RunningProc) {
-            Write-Host "    ! Closing running instance of '$ProcessName'..." -ForegroundColor DarkYellow
-            try {
-                Stop-Process -Name $ProcessName -Force -ErrorAction Stop
-                Start-Sleep -Seconds 2
-            }
-            catch { Write-Warning "    Could not close $ProcessName." }
+    elseif ($needsUpdate) {
+        Write-Host "[UPDATING] Update available for $PackageId. Updating..." -ForegroundColor Magenta
+        Start-Process winget -ArgumentList "upgrade --id $PackageId $WingetArgs" -Wait -NoNewWindow
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  [OK] $PackageId updated successfully." -ForegroundColor Green
+        } else {
+            Write-Host "  [ERROR] Failed to update $PackageId." -ForegroundColor Red
         }
+    }
+    else {
+        Write-Host "[SKIPPED] $PackageId is up to date." -ForegroundColor DarkGray
     }
 }
 
-<#
-.FUNCTION Execute-Plan
-.DESCRIPTION
-    Executes winget using Argument Lists (Splats) instead of Invoke-Expression.
-    This fixes bugs with spaces and parentheses in file paths.
-#>
-<#
-.FUNCTION Execute-Plan
-.DESCRIPTION
-    Executes commands and capturing real output.
-    Checks $LASTEXITCODE to determine if installation actually succeeded.
-#>
-<#
-.FUNCTION Execute-Plan
-.DESCRIPTION
-    Executes commands with smart quote handling for paths with spaces.
-    Converts single quotes from text file to escaped double quotes for Winget.
-#>
-<#
-.FUNCTION Execute-Plan
-.DESCRIPTION
-    Executes commands with smart quote handling for paths with spaces.
-    Converts single quotes from text file to escaped double quotes for Winget.
-#>
-<#
-.FUNCTION Execute-Plan
-.DESCRIPTION
-    Executes commands using Argument Lists.
-    Fixes the double-escaping issue by letting PowerShell handle the quotes.
-#>
-function Execute-Plan {
-    param ( $Plan )
-    $ToProcess = $Plan | Where-Object { $_.Status -ne $Status.UpToDate }
+# --- Main Execution ---
 
-    if ($ToProcess.Count -eq 0) {
-        Write-Host "`nAll packages are up to date! Nothing to do." -ForegroundColor Green
-        return
-    }
+Show-Header
 
-    Write-Host "`nStarting Execution Phase ($($ToProcess.Count) tasks)..." -ForegroundColor Yellow
-    Write-Host "--------------------------------------------------"
+# 1. Read package list
+$targetPackages = Get-PackageList
+Write-Host "[INFO] Processing $($targetPackages.Count) packages.`n" -ForegroundColor Gray
 
-    foreach ($Item in $ToProcess) {
-        $Pkg = $Item.Id
-        Write-Host "Processing: $Pkg" -NoNewline
-        
-        Stop-ConflictingProcess -ProcessName $Item.ProcessName
+# 2. Scan System
+$systemState = Scan-System
 
-        # --- Base Arguments ---
-        $BaseArgs = @("--id", $Pkg, "-e", "--accept-package-agreements", "--accept-source-agreements")
-        
-        # --- Handle Overrides vs Silent ---
-        $FinalArgs = @()
-        
-        if (-not [string]::IsNullOrWhiteSpace($Item.Arguments)) {
-            # DÜZELTME: Sadece tek tırnağı çift tırnağa çeviriyoruz.
-            # Önüne `\` (kaçış karakteri) KOYMUYORUZ. PowerShell bunu dizi olarak gönderirken
-            # otomatik olarak gerekli tırnaklamayı yapacaktır.
-            $SanitizedArgs = $Item.Arguments.Replace("'", '"') 
-            
-            $FinalArgs += "--override"
-            $FinalArgs += $SanitizedArgs
-            Write-Host " [Custom Args Applied]" -ForegroundColor DarkGray -NoNewline
-        }
-        else {
-            $FinalArgs += "--silent"
-        }
+Write-Host "`n[PROCESS] Starting package operations...`n" -ForegroundColor White
 
-        # Komut Hazırlığı
-        $CommandArgs = @()
-        if ($Item.Status -eq $Status.Missing) {
-            Write-Host " [Installing]" -ForegroundColor Cyan
-            $CommandArgs = @("install") + $BaseArgs + @("--source", "winget") + $FinalArgs
-        }
-        elseif ($Item.Status -eq $Status.Outdated) {
-            Write-Host " [Upgrading]" -ForegroundColor Magenta
-            $CommandArgs = @("upgrade") + $BaseArgs + @("--include-unknown", "--force") + $FinalArgs
-        }
-
-        # --- KOMUTU ÇALIŞTIR ---
-        try {
-            # Hata ayıklama: Gerçekten ne çalıştırıldığını görmek için bu satırı açabilirsiniz:
-            # Write-Host "`nDEBUG: winget $CommandArgs" -ForegroundColor DarkGray
-            
-            $ProcessOutput = & winget $CommandArgs 2>&1 | Out-String
-            
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host " -> Success." -ForegroundColor Green
-            }
-            else {
-                Write-Host "`n [!] OPERATION FAILED (Exit Code: $LASTEXITCODE)" -ForegroundColor Red
-                
-                # Hata özetini göster
-                $LogLines = $ProcessOutput -split "`n"
-                # Genellikle hata mesajı son satırlarda değil, ilk satırlardadır winget'te.
-                # Ama biz output'un tamamını temizleyip gösterelim:
-                $CleanLog = $LogLines | Where-Object { $_ -notmatch "Download|Verified|Progress" } | Select-Object -Last 15
-                
-                Write-Host " Winget Output Summary:" -ForegroundColor Gray
-                Write-Host ($CleanLog -join "`n") -ForegroundColor DarkGray
-                Write-Host "--------------------------------------------------"
-            }
-        }
-        catch {
-            Write-Error "`nCritical Script Error processing $Pkg. Detail: $_"
-        }
-    }
+# 3. Apply Operations
+foreach ($pkg in $targetPackages) {
+    Install-Or-Update -PackageId $pkg.Trim() -SystemState $systemState
 }
-# --- Main Execution Block ---
 
-try {
-    Show-Banner
-    $TargetConfig = Get-PackageConfig -Path $ConfigPath
-    
-    if ($TargetConfig.Count -eq 0) { Write-Warning "Package list is empty."; exit }
-    
-    Write-Host "Loaded $($TargetConfig.Count) packages from config."
-    Get-SystemState
-    $Plan = Analyze-Packages -ConfigList $TargetConfig
-    
-    Write-Host "`nAnalysis Complete. Summary:" -ForegroundColor White
-    $Plan | Select-Object Id, Status | Format-Table -AutoSize
-    
-    Execute-Plan -Plan $Plan
-    Write-Host "`nAll operations completed successfully." -ForegroundColor Green
-}
-catch {
-    Write-Error "Critical Error: $_"
-    exit 1
-}
+Write-Host "`n--------------------------------------------------------" -ForegroundColor DarkGray
+Write-Host "[COMPLETED] All operations finished." -ForegroundColor Green
+Write-Host "Press any key to exit..." -ForegroundColor Gray
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
