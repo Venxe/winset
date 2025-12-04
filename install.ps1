@@ -1,13 +1,11 @@
 <#
 .SYNOPSIS
-    Automated software installation script with Smart Process Management.
+    Automated software installation script with Smart Process Management & Custom Arguments.
 
 .DESCRIPTION
-    1. Reads 'packages.txt' to get Package IDs and optional Process Names.
-    2. Format in TXT: "PackageID=ProcessName" or just "PackageID".
-    3. Analyzes system state (Parallel-like check).
-    4. Kills conflicting processes defined in the TXT file before updating.
-    5. Installs or upgrades packages efficiently.
+    1. Reads 'packages.txt'. Format: "PackageID=ProcessName|CustomArguments"
+    2. Kills conflicting processes.
+    3. Uses --override for packages requiring custom install paths (e.g. Battle.net).
 #>
 
 Set-StrictMode -Version Latest
@@ -43,8 +41,7 @@ function Show-Banner {
 <#
 .FUNCTION Get-PackageConfig
 .DESCRIPTION
-    Parses the TXT file into a structured list of objects.
-    Splits lines by '=' to separate ID and Process Name.
+    Parses TXT file. Supports 3 parts: ID = ProcessName | Arguments
 #>
 function Get-PackageConfig {
     param ( [string]$Path )
@@ -55,23 +52,39 @@ function Get-PackageConfig {
 
     foreach ($Line in $RawContent) {
         $Trimmed = $Line.Trim()
-        # Skip empty lines and comments
         if ([string]::IsNullOrWhiteSpace($Trimmed) -or $Trimmed.StartsWith("#")) { continue }
 
-        # Parse "PackageID=ProcessName"
+        $PkgId = $null
+        $ProcName = $null
+        $Args = $null
+
+        # Logic to split ID=Process|Args
         if ($Trimmed -match "=") {
-            $Parts = $Trimmed -split "=", 2
-            $ConfigList += [PSCustomObject]@{
-                Id          = $Parts[0].Trim()
-                ProcessName = $Parts[1].Trim()
+            $FirstSplit = $Trimmed -split "=", 2
+            $PkgId = $FirstSplit[0].Trim()
+            $RightSide = $FirstSplit[1].Trim()
+
+            if ($RightSide -match "\|") {
+                $SecondSplit = $RightSide -split "\|", 2
+                $ProcName = $SecondSplit[0].Trim()
+                $Args = $SecondSplit[1].Trim()
+            }
+            else {
+                $ProcName = $RightSide
             }
         }
         else {
-            # Case where no process name is provided
-            $ConfigList += [PSCustomObject]@{
-                Id          = $Trimmed
-                ProcessName = $null
-            }
+            $PkgId = $Trimmed
+        }
+
+        # Treat empty strings as null for cleaner logic later
+        if ([string]::IsNullOrWhiteSpace($ProcName)) { $ProcName = $null }
+        if ([string]::IsNullOrWhiteSpace($Args)) { $Args = $null }
+
+        $ConfigList += [PSCustomObject]@{
+            Id          = $PkgId
+            ProcessName = $ProcName
+            Arguments   = $Args
         }
     }
     return $ConfigList
@@ -104,7 +117,6 @@ function Analyze-Packages {
             $CurrentStatus = $Status.Missing
         }
 
-        # Add status to the existing object
         $Item | Add-Member -MemberType NoteProperty -Name "Status" -Value $CurrentStatus
         $ActionPlan += $Item
     }
@@ -113,19 +125,15 @@ function Analyze-Packages {
 
 function Stop-ConflictingProcess {
     param ( [string]$ProcessName )
-
     if (-not [string]::IsNullOrWhiteSpace($ProcessName)) {
         $RunningProc = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
-
         if ($RunningProc) {
             Write-Host "    ! Closing running instance of '$ProcessName'..." -ForegroundColor DarkYellow
             try {
                 Stop-Process -Name $ProcessName -Force -ErrorAction Stop
                 Start-Sleep -Seconds 2
             }
-            catch {
-                Write-Warning "    Could not close $ProcessName. Install might fail."
-            }
+            catch { Write-Warning "    Could not close $ProcessName." }
         }
     }
 }
@@ -135,7 +143,7 @@ function Execute-Plan {
     $ToProcess = $Plan | Where-Object { $_.Status -ne $Status.UpToDate }
 
     if ($ToProcess.Count -eq 0) {
-        Write-Host "`nAll packages are already installed and up to date! Nothing to do." -ForegroundColor Green
+        Write-Host "`nAll packages are up to date! Nothing to do." -ForegroundColor Green
         return
     }
 
@@ -145,23 +153,41 @@ function Execute-Plan {
     foreach ($Item in $ToProcess) {
         $Pkg = $Item.Id
         Write-Host "Processing: $Pkg" -NoNewline
-
-        # Kill App using the name from the TXT file
+        
         Stop-ConflictingProcess -ProcessName $Item.ProcessName
+
+        # Prepare arguments
+        # Base arguments: Exact match, Accept source/package agreements
+        $InstallCmd = "winget install --id $Pkg -e --source winget --accept-package-agreements --accept-source-agreements"
+        $UpgradeCmd = "winget upgrade --id $Pkg -e --accept-package-agreements --accept-source-agreements --include-unknown --force"
+
+        # Handle Custom Override Arguments vs Standard Silent
+        if (-not [string]::IsNullOrWhiteSpace($Item.Arguments)) {
+            # If custom args exist, use override (Warning: this replaces default silent flags of winget)
+            $OverrideStr = " --override `"$($Item.Arguments)`""
+            $InstallCmd += $OverrideStr
+            $UpgradeCmd += $OverrideStr
+            Write-Host " [Custom Args Applied]" -ForegroundColor DarkGray -NoNewline
+        }
+        else {
+            # Standard silent install
+            $InstallCmd += " --silent"
+            $UpgradeCmd += " --silent"
+        }
 
         try {
             if ($Item.Status -eq $Status.Missing) {
                 Write-Host " [Installing]" -ForegroundColor Cyan
-                winget install --id $Pkg -e --source winget --accept-package-agreements --accept-source-agreements --silent
+                Invoke-Expression $InstallCmd | Out-Null
             }
             elseif ($Item.Status -eq $Status.Outdated) {
                 Write-Host " [Upgrading]" -ForegroundColor Magenta
-                winget upgrade --id $Pkg -e --silent --accept-package-agreements --accept-source-agreements --include-unknown --force
+                Invoke-Expression $UpgradeCmd | Out-Null
             }
             Write-Host " -> Done." -ForegroundColor Green
         }
         catch {
-            Write-Error "`nFailed to process $Pkg. Error: $_"
+            Write-Error "`nFailed to process $Pkg. Detail: $_"
         }
     }
 }
@@ -170,28 +196,18 @@ function Execute-Plan {
 
 try {
     Show-Banner
-    
-    # 1. Load Config (Parses ID=ProcessName)
     $TargetConfig = Get-PackageConfig -Path $ConfigPath
     
-    if ($TargetConfig.Count -eq 0) {
-        Write-Warning "Package list is empty."
-        exit
-    }
+    if ($TargetConfig.Count -eq 0) { Write-Warning "Package list is empty."; exit }
     
     Write-Host "Loaded $($TargetConfig.Count) packages from config."
-    
-    # 2. Analyze
     Get-SystemState
     $Plan = Analyze-Packages -ConfigList $TargetConfig
     
-    # 3. Show Summary
     Write-Host "`nAnalysis Complete. Summary:" -ForegroundColor White
     $Plan | Select-Object Id, Status | Format-Table -AutoSize
     
-    # 4. Execute
     Execute-Plan -Plan $Plan
-    
     Write-Host "`nAll operations completed successfully." -ForegroundColor Green
 }
 catch {
