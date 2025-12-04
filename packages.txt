@@ -1,24 +1,16 @@
-# --- Gaming ---
 Valve.Steam=steam
 EpicGames.EpicGamesLauncher=EpicGamesLauncher
 ElectronicArts.EADesktop=EADesktop
 Ubisoft.Connect=upc
 GOG.Galaxy=GalaxyClient
-Blizzard.BattleNet=Battle.net|--lang=trTR --installpath='C:\Program Files (x86)\Battle.net'
-# --- Communication ---
+Blizzard.BattleNet=Battle.net
 Discord.Discord=Discord
 Telegram.TelegramDesktop=Telegram
-
-# --- Browsers ---
 Mozilla.Firefox.tr=firefox
-TorProject.TorBrowser=firefox  # Tor da firefox exe'sini kullanır
-
-# --- Dev Tools ---
+TorProject.TorBrowser=firefox
 Microsoft.VisualStudioCode=Code
 JetBrains.Toolbox=jetbrains-toolbox
 GitHub.GitHubDesktop=GitHubDesktop
-
-# --- Utilities (İşlem adı gerekmeyenler sadece ID yazılabilir) ---
 7zip.7zip
 Cloudflare.Warp
 Tailscale.Tailscale
