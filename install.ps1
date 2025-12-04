@@ -34,7 +34,8 @@ function Show-Banner {
 |___/_/ \_\_| |___|_|_ |_|___/\___/|_|_\/_/ \_\_|\_\ |___/
 \ \    / /_ _| \| / __| __|_   _|                         
  \ \/\/ / | || .` \__ \ _|  | |                           
-  \_/\_/ |___|_|\_|___/___| |_|
+  \_/\_/ |___|_|\_|___/___| |_|                           
+
 "@
     # Print in a specific color (Cyan) to make it pop
     Write-Host $Banner -ForegroundColor Cyan
