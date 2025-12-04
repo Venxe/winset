@@ -9,7 +9,7 @@ function Show-Banner {
     Clear-Host
     # Minimalist, clean header
     Write-Host "`n :: WINGET AUTOMATION TOOL ::" -ForegroundColor Cyan -BackgroundColor Black
-    Write-Host "    v2.1 | Optimized & Auto-Close`n" -ForegroundColor DarkGray
+    Write-Host "    v2.2 | Optimized, Auto-Close & Custom Path`n" -ForegroundColor DarkGray
 }
 
 function Get-CleanedPackageList {
@@ -96,7 +96,12 @@ function Invoke-WingetAction {
 
     if ($Action -eq "Install") {
         Write-Host " [+] Installing : $Id" -ForegroundColor Cyan
-        winget install -e --id $Id --silent --accept-package-agreements --accept-source-agreements
+        
+        # Calculate custom path: C:\Program Files (x86)\<AppName>
+        $appName = $Id.Split('.')[-1]
+        $customPath = Join-Path "C:\Program Files (x86)" $appName
+
+        winget install -e --id $Id --silent --accept-package-agreements --accept-source-agreements --location $customPath
     }
     elseif ($Action -eq "Update") {
         Write-Host " [^] Updating   : $Id" -ForegroundColor Magenta
