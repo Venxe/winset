@@ -148,6 +148,12 @@ function Stop-ConflictingProcess {
     Executes commands with smart quote handling for paths with spaces.
     Converts single quotes from text file to escaped double quotes for Winget.
 #>
+<#
+.FUNCTION Execute-Plan
+.DESCRIPTION
+    Executes commands with smart quote handling for paths with spaces.
+    Converts single quotes from text file to escaped double quotes for Winget.
+#>
 function Execute-Plan {
     param ( $Plan )
     $ToProcess = $Plan | Where-Object { $_.Status -ne $Status.UpToDate }
