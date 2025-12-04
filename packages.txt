@@ -4,7 +4,7 @@ EpicGames.EpicGamesLauncher=EpicGamesLauncher
 ElectronicArts.EADesktop=EADesktop
 Ubisoft.Connect=upc
 GOG.Galaxy=GalaxyClient
-Blizzard.BattleNet=Battle.net
+Blizzard.BattleNet=Battle.net|--lang=trTR --installpath="C:\Program Files (x86)\Blizzard"
 
 # --- Communication ---
 Discord.Discord=Discord
