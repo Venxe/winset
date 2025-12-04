@@ -1,0 +1,39 @@
+# Gaming Clients
+ElectronicArts.EADesktop
+Ubisoft.Connect
+Valve.Steam
+EpicGames.EpicGamesLauncher
+GOG.Galaxy
+Blizzard.BattleNet
+
+# Development Tools
+JetBrains.Toolbox
+Microsoft.VisualStudioCode
+GitHub.GitHubDesktop
+Git.Git
+
+# Communication
+Discord.Discord
+Telegram.TelegramDesktop
+
+# Browsers
+Mozilla.Firefox.tr
+TorProject.TorBrowser
+
+# Utilities
+7zip.7zip
+Cloudflare.Warp
+Tailscale.Tailscale
+Spotify.Spotify
+Bitwarden.Bitwarden
+Google.GoogleDrive
+LocalSend.LocalSend
+Proton.ProtonVPN
+RustDesk.RustDesk
+qBittorrent.qBittorrent
+Obsidian.Obsidian
+
+# Creative
+Upscayl.Upscayl
+Adobe.CreativeCloud
+Modrinth.ModrinthApp
