@@ -1,10 +1,12 @@
 <#
 .SYNOPSIS
-    Automated software installation script using Winget with TXT configuration.
+    Automated software installation script with Pre-Flight Analysis.
 
 .DESCRIPTION
-    Reads a package list, checks installation status, handles timeouts, 
-    and verifies exit codes for robust error reporting.
+    1. Analyzes the current system state (Bulk check).
+    2. Identifies missing or outdated packages from 'packages.txt'.
+    3. Displays a summary plan.
+    4. Executes installations/upgrades only where necessary.
 
 .NOTES
     File Name      : install_apps.ps1
@@ -14,11 +16,20 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# Configuration
+# Configuration path
 $ConfigFileName = "packages.txt"
 $ConfigPath = Join-Path -Path $PSScriptRoot -ChildPath $ConfigFileName
-$InstallTimeoutSeconds = 600 # 10 Minutes timeout per app
 
+# Custom Objects for Status Tracking
+$Status = @{
+    Missing    = "Missing (Will Install)"
+    Outdated   = "Outdated (Will Upgrade)"
+    UpToDate   = "Up to Date (Skipping)"
+}
+
+<#
+.FUNCTION Show-Banner
+#>
 function Show-Banner {
     Clear-Host
     $Banner = @"
@@ -35,134 +46,132 @@ function Show-Banner {
     Write-Host $Banner -ForegroundColor Cyan
 }
 
+<#
+.FUNCTION Get-PackageList
+#>
 function Get-PackageList {
     param ( [string]$Path )
     if (-not (Test-Path -Path $Path)) { throw "Configuration file not found at: $Path" }
-    return Get-Content -Path $Path | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and -not $_.StartsWith("#") }
+    
+    return Get-Content -Path $Path | 
+           ForEach-Object { $_.Trim() } | 
+           Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and -not $_.StartsWith("#") }
 }
 
 <#
-.FUNCTION Run-WingetCommand
+.FUNCTION Get-SystemState
 .DESCRIPTION
-    Runs winget via Start-Process to handle timeouts and exit codes properly.
+    Fetches all installed and upgradeable packages in one go to avoid slow iterations.
 #>
-function Run-WingetCommand {
-    param (
-        [string]$Arguments,
-        [string]$ActionName
-    )
+function Get-SystemState {
+    Write-Host " [1/3] Fetching installed packages list..." -ForegroundColor Yellow
+    # We capture the raw string output of all installed apps
+    $Global:InstalledData = winget list --source winget 2>&1 | Out-String
 
-    $ProcessInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $ProcessInfo.FileName = "winget"
-    $ProcessInfo.Arguments = $Arguments
-    $ProcessInfo.RedirectStandardOutput = $false # Keep output visible
-    $ProcessInfo.RedirectStandardError = $false
-    $ProcessInfo.UseShellExecute = $false
-    $ProcessInfo.CreateNoWindow = $true
-
-    $Process = New-Object System.Diagnostics.Process
-    $Process.StartInfo = $ProcessInfo
-
-    try {
-        $Process.Start() | Out-Null
-        
-        # Wait for the process with a timeout
-        if ($Process.WaitForExit($InstallTimeoutSeconds * 1000)) {
-            # Process finished within timeout
-            return $Process.ExitCode
-        }
-        else {
-            # Timeout reached
-            $Process.Kill()
-            Write-Warning " [TIMEOUT] Operation took longer than $InstallTimeoutSeconds seconds."
-            return -999 # Custom code for timeout
-        }
-    }
-    catch {
-        return -1
-    }
+    Write-Host " [2/3] Checking for available upgrades..." -ForegroundColor Yellow
+    # We capture the raw string output of all available upgrades
+    $Global:UpgradeData = winget upgrade --source winget --include-unknown 2>&1 | Out-String
 }
 
-function Install-WingetPackage {
-    param ( [string]$PackageId )
-
-    Write-Host "Processing: $PackageId" -ForegroundColor Yellow
-
-    # 1. CHECK: Is the app already installed?
-    $CheckArgs = "list --id $PackageId --exact --source winget"
-    # We use a simple execution for list as it's fast
-    $ListProcess = Start-Process winget -ArgumentList $CheckArgs -NoNewWindow -PassThru -Wait
-    $IsInstalled = ($ListProcess.ExitCode -eq 0)
-
-    if ($IsInstalled) {
-        # --- UPGRADE PATH ---
-        Write-Host " -> App exists. Checking for updates..." -NoNewline
-        
-        # Arguments: --include-unknown handles apps with versioning issues
-        # --disable-interactivity prevents pop-ups that hang scripts
-        $UpgradeArgs = "upgrade --id $PackageId --exact --silent --accept-package-agreements --accept-source-agreements --include-unknown --disable-interactivity --force"
-        
-        $ExitCode = Run-WingetCommand -Arguments $UpgradeArgs -ActionName "Upgrade"
-
-        if ($ExitCode -eq 0) {
-            Write-Host " [Success/Up-to-Date]" -ForegroundColor Green
-        }
-        elseif ($ExitCode -eq -999) {
-            Write-Host " [Skipped due to Timeout]" -ForegroundColor Red
-        }
-        else {
-            # Winget upgrade returns specific codes if no update found, but usually 0 or generic error
-            Write-Host " [Check/Update Completed (Code: $ExitCode)]" -ForegroundColor Magenta
-        }
-    }
-    else {
-        # --- INSTALL PATH ---
-        Write-Host " -> App not found. Installing..." -NoNewline
-        
-        $InstallArgs = "install --id $PackageId -e --source winget --accept-package-agreements --accept-source-agreements --silent --disable-interactivity --force"
-        
-        $ExitCode = Run-WingetCommand -Arguments $InstallArgs -ActionName "Install"
-
-        if ($ExitCode -eq 0) {
-            Write-Host " [Installed Successfully]" -ForegroundColor Green
-        }
-        elseif ($ExitCode -eq -999) {
-            Write-Host " [FAILED - TIMEOUT]" -ForegroundColor Red
-            Write-Warning "The installer for $PackageId hung. It might require manual installation."
-        }
-        else {
-            Write-Host " [FAILED - Error Code: $ExitCode]" -ForegroundColor Red
-        }
-    }
+<#
+.FUNCTION Analyze-Packages
+.DESCRIPTION
+    Compares the target list against the system state.
+#>
+function Analyze-Packages {
+    param ( [string[]]$TargetPackages )
     
+    $ActionPlan = @()
+
+    Write-Host " [3/3] Analyzing package status..." -ForegroundColor Yellow
+
+    foreach ($Pkg in $TargetPackages) {
+        $CurrentStatus = $null
+
+        # Check Logic: String matching is faster and reliable enough for IDs
+        if ($Global:InstalledData -match "\b$([Regex]::Escape($Pkg))\b") {
+            if ($Global:UpgradeData -match "\b$([Regex]::Escape($Pkg))\b") {
+                $CurrentStatus = $Status.Outdated
+            } else {
+                $CurrentStatus = $Status.UpToDate
+            }
+        } else {
+            $CurrentStatus = $Status.Missing
+        }
+
+        $ActionPlan += [PSCustomObject]@{
+            PackageId = $Pkg
+            Status    = $CurrentStatus
+        }
+    }
+    return $ActionPlan
+}
+
+<#
+.FUNCTION Execute-Plan
+.DESCRIPTION
+    Executes the installation/upgrade commands based on the analysis.
+#>
+function Execute-Plan {
+    param ( $Plan )
+
+    # Filter only items that need action
+    $ToProcess = $Plan | Where-Object { $_.Status -ne $Status.UpToDate }
+
+    if ($ToProcess.Count -eq 0) {
+        Write-Host "`nAll packages are already installed and up to date! Nothing to do." -ForegroundColor Green
+        return
+    }
+
+    Write-Host "`nStarting Execution Phase ($($ToProcess.Count) tasks)..." -ForegroundColor Yellow
     Write-Host "--------------------------------------------------"
+
+    foreach ($Item in $ToProcess) {
+        $Pkg = $Item.PackageId
+        Write-Host "Processing: $Pkg" -NoNewline
+
+        try {
+            if ($Item.Status -eq $Status.Missing) {
+                Write-Host " [Installing]" -ForegroundColor Cyan
+                winget install --id $Pkg -e --source winget --accept-package-agreements --accept-source-agreements --silent
+            }
+            elseif ($Item.Status -eq $Status.Outdated) {
+                Write-Host " [Upgrading]" -ForegroundColor Magenta
+                winget upgrade --id $Pkg -e --silent --accept-package-agreements --accept-source-agreements --include-unknown
+            }
+            Write-Host " -> Done." -ForegroundColor Green
+        }
+        catch {
+            Write-Error "`nFailed to process $Pkg. Error: $_"
+        }
+    }
 }
 
 # --- Main Execution Block ---
 
 try {
     Show-Banner
-    Write-Host "Reading package list from $ConfigFileName..." 
-    $PackageList = Get-PackageList -Path $ConfigPath
 
-    if ($null -eq $PackageList -or $PackageList.Count -eq 0) {
-        Write-Warning "No valid packages found."
+    # 1. Load Configuration
+    $TargetList = Get-PackageList -Path $ConfigPath
+    if ($null -eq $TargetList -or $TargetList.Count -eq 0) {
+        Write-Warning "Package list is empty."
         exit
     }
+    Write-Host "Loaded $($TargetList.Count) packages from config."
 
-    Write-Host "Found $($PackageList.Count) packages."
-    Write-Host "Timeout set to: $InstallTimeoutSeconds seconds per app."
-    Write-Host "--------------------------------------------------"
+    # 2. Analyze System (Parallel-like bulk check)
+    Get-SystemState
+    $Plan = Analyze-Packages -TargetPackages $TargetList
 
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        throw "Winget is not found. Please update App Installer via Microsoft Store."
-    }
+    # 3. Show Summary Table
+    Write-Host "`nAnalysis Complete. Summary:" -ForegroundColor White
+    $Plan | Format-Table -AutoSize
 
-    foreach ($AppId in $PackageList) {
-        Install-WingetPackage -PackageId $AppId
-    }
+    # 4. Execute
+    Execute-Plan -Plan $Plan
 
-    Write-Host "`nAll operations completed." -ForegroundColor Green
+    Write-Host "`nAll operations completed successfully." -ForegroundColor Green
 }
 catch {
     Write-Error "Critical Error: $_"
